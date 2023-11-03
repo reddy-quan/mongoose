@@ -94,8 +94,9 @@ typedef int socklen_t;
   (((errcode) < 0) && (WSAGetLastError() == WSAECONNRESET))
 
 #define realpath(a, b) _fullpath((b), (a), MG_PATH_MAX)
-#define sleep(x) Sleep(x)
+#define sleep(x) Sleep((x) *1000)
 #define mkdir(a, b) _mkdir(a)
+#define timegm(x) _mkgmtime(x)
 
 #ifndef S_ISDIR
 #define S_ISDIR(x) (((x) &_S_IFMT) == _S_IFDIR)
@@ -103,6 +104,10 @@ typedef int socklen_t;
 
 #ifndef MG_ENABLE_DIRLIST
 #define MG_ENABLE_DIRLIST 1
+#endif
+
+#ifndef SIGPIPE
+#define SIGPIPE 0
 #endif
 
 #endif

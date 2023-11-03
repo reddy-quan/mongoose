@@ -17,6 +17,9 @@ CFLAGS += -IFreeRTOS-Kernel/portable/GCC/ARM_CM4F -Wno-conversion
 SOURCES += mongoose.c  net.c packed_fs.c
 CFLAGS += $(CFLAGS_EXTRA)       # Mongoose options are defined in mongoose_custom.h
 
+# Example specific build options. See README.md
+CFLAGS += -DHTTP_URL=\"http://0.0.0.0/\"
+
 ifeq ($(OS),Windows_NT)
   RM = cmd /C del /Q /F /S
 else
@@ -46,7 +49,7 @@ DEVICE_URL ?= https://dash.vcon.io/api/v3/devices/1
 update: firmware.bin
 	curl --fail-with-body -su :$(VCON_API_KEY) $(DEVICE_URL)/ota --data-binary @$<
 
-test update: CFLAGS_EXTRA += -DUART_DEBUG=UART0
+test update: CFLAGS += -DUART_DEBUG=UART0
 test: update
 	curl --fail-with-body -su :$(VCON_API_KEY) $(DEVICE_URL)/tx?t=5 | tee /tmp/output.txt
 	grep 'READY, IP:' /tmp/output.txt       # Check for network init

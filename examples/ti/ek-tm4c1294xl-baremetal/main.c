@@ -3,6 +3,7 @@
 
 #include "hal.h"
 #include "mongoose.h"
+#include "net.h"
 
 #define LED1 PIN('N', 1)  // On-board LED pin
 #define LED2 PIN('N', 0)  // On-board LED pin
@@ -22,9 +23,9 @@ uint64_t mg_millis(void) {  // Let Mongoose use our uptime function
 }
 
 static void timer_fn(void *arg) {
-  gpio_toggle(LED);                               // Blink LED
-  struct mg_tcpip_if *ifp = arg;                  // And show
-  const char *names[] = {"down", "up", "ready"};  // network stats
+  gpio_toggle(LED);                                      // Blink LED
+  struct mg_tcpip_if *ifp = arg;                         // And show
+  const char *names[] = {"down", "up", "req", "ready"};  // network stats
   MG_INFO(("Ethernet: %s, IP: %M, rx:%u, tx:%u, dr:%u, er:%u",
            names[ifp->state], mg_print_ip4, &ifp->ip, ifp->nrecv, ifp->nsent,
            ifp->ndrop, ifp->nerr));
@@ -67,12 +68,14 @@ int main(void) {
   mg_log_set(MG_LL_DEBUG);  // Set log level
 
   // Initialise Mongoose network stack
-  // Specify MAC address, and IP/mask/GW in network byte order for static
-  // IP configuration. If IP/mask/GW are unset, DHCP is going to be used
   struct mg_tcpip_driver_tm4c_data driver_data = {.mdc_cr =
                                                       1};  // See driver_tm4c.h
   struct mg_tcpip_if mif = {
       .mac = READ_PREFLASHED_MAC(),
+      // Uncomment below for static configuration:
+      // .ip = mg_htonl(MG_U32(192, 168, 0, 223)),
+      // .mask = mg_htonl(MG_U32(255, 255, 255, 0)),
+      // .gw = mg_htonl(MG_U32(192, 168, 0, 1)),
       .driver = &mg_tcpip_driver_tm4c,
       .driver_data = &driver_data,
   };
@@ -89,8 +92,7 @@ int main(void) {
   }
 
   MG_INFO(("Initialising application..."));
-  extern void device_dashboard_fn(struct mg_connection *, int, void *, void *);
-  mg_http_listen(&mgr, "http://0.0.0.0", device_dashboard_fn, NULL);
+  web_init(&mgr);
 
   MG_INFO(("Starting event loop"));
   for (;;) {

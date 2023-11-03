@@ -13,10 +13,10 @@ struct mg_dns {
 };
 
 struct mg_addr {
-  uint16_t port;    // TCP or UDP port in network byte order
-  uint32_t ip;      // IP address in network byte order
-  uint8_t ip6[16];  // IPv6 address
-  bool is_ip6;      // True when address is IPv6 address
+  uint8_t ip[16];    // Holds IPv4 or IPv6 address, in network byte order
+  uint16_t port;     // TCP or UDP port in network byte order
+  uint8_t scope_id;  // IPv6 scope ID
+  bool is_ip6;       // True when address is IPv6 address
 };
 
 struct mg_mgr {
@@ -28,6 +28,7 @@ struct mg_mgr {
   unsigned long nextid;         // Next connection ID
   unsigned long timerid;        // Next timer ID
   void *userdata;               // Arbitrary user data pointer
+  void *tls_ctx;                // TLS context shared by all TLS sessions
   uint16_t mqtt_id;             // MQTT IDs for pub/sub
   void *active_dns_requests;    // DNS requests in progress
   struct mg_timer *timers;      // Active timers
@@ -89,7 +90,6 @@ bool mg_send(struct mg_connection *, const void *, size_t);
 size_t mg_printf(struct mg_connection *, const char *fmt, ...);
 size_t mg_vprintf(struct mg_connection *, const char *fmt, va_list *ap);
 bool mg_aton(struct mg_str str, struct mg_addr *addr);
-int mg_mkpipe(struct mg_mgr *, mg_event_handler_t, void *, bool udp);
 
 // These functions are used to integrate with custom network stacks
 struct mg_connection *mg_alloc_conn(struct mg_mgr *);

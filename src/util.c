@@ -1,5 +1,13 @@
 #include "util.h"
 
+// Not using memset for zeroing memory, cause it can be dropped by compiler
+// See https://github.com/cesanta/mongoose/pull/1265
+void mg_bzero(volatile unsigned char *buf, size_t len) {
+  if (buf != NULL) {
+    while (len--) *buf++ = 0;
+  }
+}
+
 #if MG_ENABLE_CUSTOM_RANDOM
 #else
 void mg_random(void *buf, size_t len) {
@@ -55,7 +63,7 @@ uint32_t mg_crc32(uint32_t crc, const char *buf, size_t len) {
       0x9B64C2B0, 0x86D3D2D4, 0xA00AE278, 0xBDBDF21C};
   crc = ~crc;
   while (len--) {
-    uint8_t byte = *(uint8_t *)buf++;
+    uint8_t byte = *(uint8_t *) buf++;
     crc = crclut[(crc ^ byte) & 0x0F] ^ (crc >> 4);
     crc = crclut[(crc ^ (byte >> 4)) & 0x0F] ^ (crc >> 4);
   }
@@ -80,14 +88,20 @@ static int parse_net(const char *spec, uint32_t *net, uint32_t *mask) {
   return len;
 }
 
-int mg_check_ip_acl(struct mg_str acl, uint32_t remote_ip) {
+int mg_check_ip_acl(struct mg_str acl, struct mg_addr *remote_ip) {
   struct mg_str k, v;
   int allowed = acl.len == 0 ? '+' : '-';  // If any ACL is set, deny by default
-  while (mg_commalist(&acl, &k, &v)) {
-    uint32_t net, mask;
-    if (k.ptr[0] != '+' && k.ptr[0] != '-') return -1;
-    if (parse_net(&k.ptr[1], &net, &mask) == 0) return -2;
-    if ((mg_ntohl(remote_ip) & mask) == net) allowed = k.ptr[0];
+  uint32_t remote_ip4;
+  if (remote_ip->is_ip6) {
+    return -1;  // TODO(): handle IPv6 ACL and addresses
+  } else {      // IPv4
+    memcpy((void *) &remote_ip4, remote_ip->ip, sizeof(remote_ip4));
+    while (mg_commalist(&acl, &k, &v)) {
+      uint32_t net, mask;
+      if (k.ptr[0] != '+' && k.ptr[0] != '-') return -1;
+      if (parse_net(&k.ptr[1], &net, &mask) == 0) return -2;
+      if ((mg_ntohl(remote_ip4) & mask) == net) allowed = k.ptr[0];
+    }
   }
   return allowed == '+';
 }
@@ -99,9 +113,8 @@ uint64_t mg_millis(void) {
   return GetTickCount();
 #elif MG_ARCH == MG_ARCH_RP2040
   return time_us_64() / 1000;
-#elif MG_ARCH == MG_ARCH_ESP32
-  return esp_timer_get_time() / 1000;
-#elif MG_ARCH == MG_ARCH_ESP8266 || MG_ARCH == MG_ARCH_FREERTOS
+#elif MG_ARCH == MG_ARCH_ESP8266 || MG_ARCH == MG_ARCH_ESP32 || \
+    MG_ARCH == MG_ARCH_FREERTOS
   return xTaskGetTickCount() * portTICK_PERIOD_MS;
 #elif MG_ARCH == MG_ARCH_AZURERTOS
   return tx_time_get() * (1000 /* MS per SEC */ / TX_TIMER_TICKS_PER_SECOND);
@@ -110,9 +123,11 @@ uint64_t mg_millis(void) {
 #elif MG_ARCH == MG_ARCH_ZEPHYR
   return (uint64_t) k_uptime_get();
 #elif MG_ARCH == MG_ARCH_CMSIS_RTOS1
-  return (uint64_t)rt_time_get();
+  return (uint64_t) rt_time_get();
 #elif MG_ARCH == MG_ARCH_CMSIS_RTOS2
-  return (uint64_t)((osKernelGetTickCount() * 1000) / osKernelGetTickFreq());
+  return (uint64_t) ((osKernelGetTickCount() * 1000) / osKernelGetTickFreq());
+#elif MG_ARCH == MG_ARCH_RTTHREAD
+  return (uint64_t) ((rt_tick_get() * 1000) / RT_TICK_PER_SECOND);
 #elif MG_ARCH == MG_ARCH_UNIX && defined(__APPLE__)
   // Apple CLOCK_MONOTONIC_RAW is equivalent to CLOCK_BOOTTIME on linux
   // Apple CLOCK_UPTIME_RAW is equivalent to CLOCK_MONOTONIC_RAW on linux

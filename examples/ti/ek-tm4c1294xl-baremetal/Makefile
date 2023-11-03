@@ -13,6 +13,9 @@ SOURCES += mongoose.c net.c packed_fs.c
 CFLAGS += -DMG_ENABLE_TCPIP=1 -DMG_ARCH=MG_ARCH_NEWLIB -DMG_ENABLE_CUSTOM_MILLIS=1
 CFLAGS += -DMG_ENABLE_DRIVER_TM4C=1 -DMG_ENABLE_PACKED_FS=1 $(CFLAGS_EXTRA)
 
+# Example specific build options. See README.md
+CFLAGS += -DHTTP_URL=\"http://0.0.0.0/\"
+
 ifeq ($(OS),Windows_NT)
   RM = cmd /C del /Q /F /S
 else
@@ -40,7 +43,7 @@ DEVICE_URL ?= https://dash.vcon.io/api/v3/devices/1
 update: firmware.bin
 	curl --fail-with-body -su :$(VCON_API_KEY) $(DEVICE_URL)/ota --data-binary @$<
 
-test update: CFLAGS_EXTRA += -DUART_DEBUG=UART0
+test update: CFLAGS += -DUART_DEBUG=UART0
 test: update
 	curl --fail-with-body -su :$(VCON_API_KEY) $(DEVICE_URL)/tx?t=5 | tee /tmp/output.txt
 	grep 'READY, IP:' /tmp/output.txt       # Check for network init

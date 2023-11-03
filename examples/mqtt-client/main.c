@@ -20,30 +20,40 @@ static struct mg_connection *s_conn;              // Client connection
 
 // Handle interrupts, like Ctrl-C
 static int s_signo;
-static void signal_handler(int signo) { s_signo = signo; }
+static void signal_handler(int signo) {
+  s_signo = signo;
+}
 
 static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
   if (ev == MG_EV_OPEN) {
     MG_INFO(("%lu CREATED", c->id));
     // c->is_hexdumping = 1;
+  } else if (ev == MG_EV_CONNECT) {
+    if (mg_url_is_ssl(s_url)) {
+      struct mg_tls_opts opts = {.ca = mg_unpacked("/certs/ca.pem"),
+                                 .name = mg_url_host(s_url)};
+      mg_tls_init(c, &opts);
+    }
   } else if (ev == MG_EV_ERROR) {
     // On error, log error message
     MG_ERROR(("%lu ERROR %s", c->id, (char *) ev_data));
-  } else if (ev == MG_EV_CONNECT) {
-    // If target URL is SSL/TLS, command client connection to use TLS
-    if (mg_url_is_ssl(s_url)) {
-      struct mg_tls_opts opts = {.ca = "ca.pem"};
-      mg_tls_init(c, &opts);
-    }
   } else if (ev == MG_EV_MQTT_OPEN) {
     // MQTT connect is successful
     struct mg_str subt = mg_str(s_sub_topic);
     struct mg_str pubt = mg_str(s_pub_topic), data = mg_str("hello");
     MG_INFO(("%lu CONNECTED to %s", c->id, s_url));
-    mg_mqtt_sub(c, subt, s_qos);
+    struct mg_mqtt_opts sub_opts;
+    memset(&sub_opts, 0, sizeof(sub_opts));
+    sub_opts.topic = subt;
+    sub_opts.qos = s_qos;
+    mg_mqtt_sub(c, &sub_opts);
     MG_INFO(("%lu SUBSCRIBED to %.*s", c->id, (int) subt.len, subt.ptr));
-
-    mg_mqtt_pub(c, pubt, data, s_qos, false);
+    struct mg_mqtt_opts pub_opts;
+    memset(&pub_opts, 0, sizeof(pub_opts));
+    pub_opts.topic = pubt;
+    pub_opts.message = data;
+    pub_opts.qos = s_qos, pub_opts.retain = false;
+    mg_mqtt_pub(c, &pub_opts);
     MG_INFO(("%lu PUBLISHED %.*s -> %.*s", c->id, (int) data.len, data.ptr,
              (int) pubt.len, pubt.ptr));
   } else if (ev == MG_EV_MQTT_MSG) {
@@ -62,9 +72,10 @@ static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
 static void timer_fn(void *arg) {
   struct mg_mgr *mgr = (struct mg_mgr *) arg;
   struct mg_mqtt_opts opts = {.clean = true,
-                              .will_qos = s_qos,
-                              .will_topic = mg_str(s_pub_topic),
-                              .will_message = mg_str("bye")};
+                              .qos = s_qos,
+                              .topic = mg_str(s_pub_topic),
+                              .version = 4,
+                              .message = mg_str("bye")};
   if (s_conn == NULL) s_conn = mg_mqtt_connect(mgr, s_url, &opts, fn, NULL);
 }
 

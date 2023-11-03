@@ -26,7 +26,7 @@ static int p_stat(const char *path, size_t *size, time_t *mtime) {
     FILE *fp = _wfopen(tmp, L"rb");
     if (fp != NULL) {
       fseek(fp, 0, SEEK_END);
-      if (ftell(fp) > 0) st.st_size = ftell(fp); // Use _ftelli64 on win10+
+      if (ftell(fp) > 0) st.st_size = ftell(fp);  // Use _ftelli64 on win10+
       fclose(fp);
     }
   }
@@ -166,13 +166,14 @@ static void p_list(const char *dir, void (*fn)(const char *, void *),
 }
 
 static void *p_open(const char *path, int flags) {
-  const char *mode = flags == MG_FS_READ ? "rb" : "a+b";
 #if MG_ARCH == MG_ARCH_WIN32
+  const char *mode = flags == MG_FS_READ ? "rb" : "a+b";
   wchar_t b1[MG_PATH_MAX], b2[10];
   MultiByteToWideChar(CP_UTF8, 0, path, -1, b1, sizeof(b1) / sizeof(b1[0]));
   MultiByteToWideChar(CP_UTF8, 0, mode, -1, b2, sizeof(b2) / sizeof(b2[0]));
   return (void *) _wfopen(b1, b2);
 #else
+  const char *mode = flags == MG_FS_READ ? "rbe" : "a+be";  // e for CLOEXEC
   return (void *) fopen(path, mode);
 #endif
 }

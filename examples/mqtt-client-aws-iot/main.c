@@ -29,8 +29,8 @@ static const char *s_url =
 // 3. From the dialog box that appears, download:
 //      xxx-certificate.pem.crt as cert.pem to the example directory
 //      xxx-private.pem.key as key.pem to the example directory
-static const char *s_cert = "cert.pem";
-static const char *s_key = "key.pem";
+// static const char *s_cert = "cert.pem";
+// static const char *s_key = "key.pem";
 
 static const char *s_rx_topic = "d/rx";
 static const char *s_tx_topic = "d/tx";
@@ -41,20 +41,25 @@ static int s_qos = 1;
 static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
   if (ev == MG_EV_OPEN) {
     // c->is_hexdumping = 1;
+  } else if (ev == MG_EV_CONNECT) {
+    if (mg_url_is_ssl(s_url)) {
+      struct mg_tls_opts opts = {.ca = mg_unpacked("/certs/ca.pem"),
+                                 .name = mg_url_host(s_url)};
+      mg_tls_init(c, &opts);
+    }
   } else if (ev == MG_EV_ERROR) {
     // On error, log error message
     MG_ERROR(("%p %s", c->fd, (char *) ev_data));
-  } else if (ev == MG_EV_CONNECT) {
-    // Set up 2-way TLS that is required by AWS IoT
-    struct mg_tls_opts opts = {
-        .ca = "ca.pem", .cert = s_cert, .certkey = s_key};
-    mg_tls_init(c, &opts);
   } else if (ev == MG_EV_MQTT_OPEN) {
     // MQTT connect is successful
     struct mg_str topic = mg_str(s_rx_topic);
     MG_INFO(("Connected to %s", s_url));
     MG_INFO(("Subscribing to %s", s_rx_topic));
-    mg_mqtt_sub(c, topic, s_qos);
+    struct mg_mqtt_opts sub_opts;
+    memset(&sub_opts, 0, sizeof(sub_opts));
+    sub_opts.topic = topic;
+    sub_opts.qos = s_qos;
+    mg_mqtt_sub(c, &sub_opts);
     c->data[0] = 'X';  // Set a label that we're logged in
   } else if (ev == MG_EV_MQTT_MSG) {
     // When we receive MQTT message, print it
@@ -67,7 +72,12 @@ static void fn(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
     if (now_second != prev_second) {
       struct mg_str topic = mg_str(s_tx_topic), data = mg_str("{\"a\":123}");
       MG_INFO(("Publishing to %s", s_tx_topic));
-      mg_mqtt_pub(c, topic, data, s_qos, false);
+      struct mg_mqtt_opts pub_opts;
+      memset(&pub_opts, 0, sizeof(pub_opts));
+      pub_opts.topic = topic;
+      pub_opts.message = data;
+      pub_opts.qos = s_qos, pub_opts.retain = false;
+      mg_mqtt_pub(c, &pub_opts);
       prev_second = now_second;
     }
   }

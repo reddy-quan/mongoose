@@ -4,6 +4,10 @@
 #define MG_ENABLE_LOG 1
 #endif
 
+#ifndef MG_ENABLE_CUSTOM_LOG
+#define MG_ENABLE_CUSTOM_LOG 0  // Let user define their own MG_LOG
+#endif
+
 #ifndef MG_ENABLE_TCPIP
 #define MG_ENABLE_TCPIP 0  // Mongoose built-in network stack
 #endif
@@ -36,24 +40,16 @@
 #define MG_ENABLE_FATFS 0
 #endif
 
-#ifndef MG_ENABLE_MBEDTLS
-#define MG_ENABLE_MBEDTLS 0
-#endif
-
-#ifndef MG_ENABLE_OPENSSL
-#define MG_ENABLE_OPENSSL 0
-#endif
-
-#ifndef MG_ENABLE_CUSTOM_TLS
-#define MG_ENABLE_CUSTOM_TLS 0
-#endif
-
 #ifndef MG_ENABLE_SSI
 #define MG_ENABLE_SSI 0
 #endif
 
 #ifndef MG_ENABLE_IPV6
 #define MG_ENABLE_IPV6 0
+#endif
+
+#ifndef MG_IPV6_V6ONLY
+#define MG_IPV6_V6ONLY 0  // IPv6 socket binds only to V6, not V4 address
 #endif
 
 #ifndef MG_ENABLE_MD5
@@ -90,7 +86,7 @@
 #endif
 
 #ifndef MG_MAX_RECV_SIZE
-#define MG_MAX_RECV_SIZE (3 * 1024 * 1024)  // Maximum recv IO buffer size
+#define MG_MAX_RECV_SIZE (3UL * 1024UL * 1024UL)  // Maximum recv IO buffer size
 #endif
 
 #ifndef MG_DATA_SIZE

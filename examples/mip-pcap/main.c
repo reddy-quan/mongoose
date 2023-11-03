@@ -47,7 +47,7 @@ static void fn2(struct mg_connection *c, int ev, void *ev_data, void *fn_data) {
     struct mg_http_message *hm = (struct mg_http_message *) ev_data;
     MG_DEBUG(("Got response (%d) %.*s...", (int) hm->message.len, 12,
               hm->message.ptr));
-    c->is_closing = 1;
+    c->is_draining = 1;
   } else if (ev == MG_EV_CONNECT) {
     mg_printf(c, "GET %s HTTP/1.1\r\n\r\n", mg_url_uri((char *) fn_data));
   } else if (ev == MG_EV_CLOSE) {
@@ -138,9 +138,6 @@ int main(int argc, char *argv[]) {
          &mif.mac[2], &mif.mac[3], &mif.mac[4], &mif.mac[5]);
   mg_tcpip_init(&mgr, &mif);
   MG_INFO(("Init done, starting main loop"));
-
-  // extern void device_dashboard_fn(struct mg_connection *, int, void *, void
-  // *);
   mg_http_listen(&mgr, "http://0.0.0.0:8000", fn, &mgr);
 
   while (s_signo == 0) mg_mgr_poll(&mgr, 100);  // Infinite event loop

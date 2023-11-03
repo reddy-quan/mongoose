@@ -2,6 +2,7 @@
 #include "event.h"
 #include "log.h"
 #include "net.h"
+#include "printf.h"
 #include "str.h"
 #include "timer.h"
 #include "tls.h"
@@ -56,12 +57,13 @@ static socklen_t tousa(struct mg_addr *a, union usa *usa) {
   memset(usa, 0, sizeof(*usa));
   usa->sin.sin_family = AF_INET;
   usa->sin.sin_port = a->port;
-  *(uint32_t *) &usa->sin.sin_addr = a->ip;
+  memcpy(&usa->sin.sin_addr, a->ip, sizeof(uint32_t));
 #if MG_ENABLE_IPV6
   if (a->is_ip6) {
     usa->sin.sin_family = AF_INET6;
     usa->sin6.sin6_port = a->port;
-    memcpy(&usa->sin6.sin6_addr, a->ip6, sizeof(a->ip6));
+    usa->sin6.sin6_scope_id = a->scope_id;
+    memcpy(&usa->sin6.sin6_addr, a->ip, sizeof(a->ip));
     len = sizeof(usa->sin6);
   }
 #endif
@@ -71,11 +73,12 @@ static socklen_t tousa(struct mg_addr *a, union usa *usa) {
 static void tomgaddr(union usa *usa, struct mg_addr *a, bool is_ip6) {
   a->is_ip6 = is_ip6;
   a->port = usa->sin.sin_port;
-  memcpy(&a->ip, &usa->sin.sin_addr, sizeof(a->ip));
+  memcpy(&a->ip, &usa->sin.sin_addr, sizeof(uint32_t));
 #if MG_ENABLE_IPV6
   if (is_ip6) {
-    memcpy(a->ip6, &usa->sin6.sin6_addr, sizeof(a->ip6));
+    memcpy(a->ip, &usa->sin6.sin6_addr, sizeof(a->ip));
     a->port = usa->sin6.sin6_port;
+    a->scope_id = (uint8_t) usa->sin6.sin6_scope_id;
   }
 #endif
 }
@@ -136,7 +139,7 @@ long mg_io_send(struct mg_connection *c, const void *buf, size_t len) {
 bool mg_send(struct mg_connection *c, const void *buf, size_t len) {
   if (c->is_udp) {
     long n = mg_io_send(c, buf, len);
-    MG_DEBUG(("%lu %p %d:%d %ld err %d", c->id, c->fd, (int) c->send.len,
+    MG_DEBUG(("%lu %ld %d:%d %ld err %d", c->id, c->fd, (int) c->send.len,
               (int) c->recv.len, n, MG_SOCK_ERR(n)));
     iolog(c, (char *) buf, n, false);
     return n > 0;
@@ -192,28 +195,32 @@ bool mg_open_listener(struct mg_connection *c, const char *url) {
 
     if ((fd = socket(af, type, proto)) == MG_INVALID_SOCKET) {
       MG_ERROR(("socket: %d", MG_SOCK_ERR(-1)));
-#if ((MG_ARCH == MG_ARCH_WIN32) || (MG_ARCH == MG_ARCH_UNIX) || \
-     (defined(LWIP_SOCKET) && SO_REUSE == 1))
-    } else if ((rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *) &on,
-                                sizeof(on))) != 0) {
-      // 1. SO_RESUSEADDR is not enabled on Windows because the semantics of
-      //    SO_REUSEADDR on UNIX and Windows is different. On Windows,
-      //    SO_REUSEADDR allows to bind a socket to a port without error even
-      //    if the port is already open by another program. This is not the
-      //    behavior SO_REUSEADDR was designed for, and leads to hard-to-track
-      //    failure scenarios. Therefore, SO_REUSEADDR was disabled on Windows
-      //    unless SO_EXCLUSIVEADDRUSE is supported and set on a socket.
-      // 2. In case of LWIP, SO_REUSEADDR should be explicitly enabled, by
-      // defining
-      //    SO_REUSE (in lwipopts.h), otherwise the code below will compile
-      //    but won't work! (setsockopt will return EINVAL)
-      MG_ERROR(("reuseaddr: %d", MG_SOCK_ERR(rc)));
-#endif
-#if MG_ARCH == MG_ARCH_WIN32 && !defined(SO_EXCLUSIVEADDRUSE) && !defined(WINCE)
+#if defined(SO_EXCLUSIVEADDRUSE)
     } else if ((rc = setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
                                 (char *) &on, sizeof(on))) != 0) {
       // "Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE"
-      MG_ERROR(("exclusiveaddruse: %d", MG_SOCK_ERR(rc)));
+      MG_ERROR(("setsockopt(SO_EXCLUSIVEADDRUSE): %d %d", on, MG_SOCK_ERR(rc)));
+#elif defined(SO_REUSEADDR) && (!defined(LWIP_SOCKET) || SO_REUSE)
+    } else if ((rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *) &on,
+                                sizeof(on))) != 0) {
+      // 1. SO_REUSEADDR semantics on UNIX and Windows is different.  On
+      // Windows, SO_REUSEADDR allows to bind a socket to a port without error
+      // even if the port is already open by another program. This is not the
+      // behavior SO_REUSEADDR was designed for, and leads to hard-to-track
+      // failure scenarios.
+      //
+      // 2. For LWIP, SO_REUSEADDR should be explicitly enabled by defining
+      // SO_REUSE = 1 in lwipopts.h, otherwise the code below will compile but
+      // won't work! (setsockopt will return EINVAL)
+      MG_ERROR(("setsockopt(SO_REUSEADDR): %d", MG_SOCK_ERR(rc)));
+#endif
+#if MG_IPV6_V6ONLY
+      // Bind only to the V6 address, not V4 address on this port
+    } else if (c->loc.is_ip6 &&
+               (rc = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (char *) &on,
+                                sizeof(on))) != 0) {
+      // See #2089. Allow to bind v4 and v6 sockets on the same port
+      MG_ERROR(("setsockopt(IPV6_V6ONLY): %d", MG_SOCK_ERR(rc)));
 #endif
     } else if ((rc = bind(fd, &usa.sa, slen)) != 0) {
       MG_ERROR(("bind: %d", MG_SOCK_ERR(rc)));
@@ -263,7 +270,7 @@ static void read_conn(struct mg_connection *c) {
     char *buf = (char *) &c->recv.buf[c->recv.len];
     size_t len = c->recv.size - c->recv.len;
     n = c->is_tls ? mg_tls_recv(c, buf, len) : mg_io_recv(c, buf, len);
-    MG_DEBUG(("%lu %p snd %ld/%ld rcv %ld/%ld n=%ld err=%d", c->id, c->fd,
+    MG_DEBUG(("%lu %ld snd %ld/%ld rcv %ld/%ld n=%ld err=%d", c->id, c->fd,
               (long) c->send.len, (long) c->send.size, (long) c->recv.len,
               (long) c->recv.size, n, MG_SOCK_ERR(n)));
     iolog(c, buf, n, true);
@@ -274,7 +281,7 @@ static void write_conn(struct mg_connection *c) {
   char *buf = (char *) c->send.buf;
   size_t len = c->send.len;
   long n = c->is_tls ? mg_tls_send(c, buf, len) : mg_io_send(c, buf, len);
-  MG_DEBUG(("%lu %p snd %ld/%ld rcv %ld/%ld n=%ld err=%d", c->id, c->fd,
+  MG_DEBUG(("%lu %ld snd %ld/%ld rcv %ld/%ld n=%ld err=%d", c->id, c->fd,
             (long) c->send.len, (long) c->send.size, (long) c->recv.len,
             (long) c->recv.size, n, MG_SOCK_ERR(n)));
   iolog(c, buf, n, false);
@@ -352,7 +359,7 @@ void mg_connect_resolved(struct mg_connection *c) {
     if (rc == 0) {                       // Success
       mg_call(c, MG_EV_CONNECT, NULL);   // Send MG_EV_CONNECT to the user
     } else if (MG_SOCK_PENDING(rc)) {    // Need to wait for TCP handshake
-      MG_DEBUG(("%lu %p -> %M pend", c->id, c->fd, mg_print_ip_port, &c->rem));
+      MG_DEBUG(("%lu %ld -> %M pend", c->id, c->fd, mg_print_ip_port, &c->rem));
       c->is_connecting = 1;
     } else {
       mg_error(c, "connect: %d", MG_SOCK_ERR(rc));
@@ -376,7 +383,7 @@ static void accept_conn(struct mg_mgr *mgr, struct mg_connection *lsn) {
   socklen_t sa_len = sizeof(usa);
   MG_SOCKET_TYPE fd = raccept(FD(lsn), &usa, &sa_len);
   if (fd == MG_INVALID_SOCKET) {
-#if MG_ARCH == MG_ARCH_AZURERTOS
+#if MG_ARCH == MG_ARCH_AZURERTOS || defined(__ECOS)
     // AzureRTOS, in non-block socket mode can mark listening socket readable
     // even it is not. See comment for 'select' func implementation in
     // nx_bsd.c That's not an error, just should try later
@@ -384,7 +391,7 @@ static void accept_conn(struct mg_mgr *mgr, struct mg_connection *lsn) {
 #endif
       MG_ERROR(("%lu accept failed, errno %d", lsn->id, MG_SOCK_ERR(-1)));
 #if (MG_ARCH != MG_ARCH_WIN32) && !MG_ENABLE_FREERTOS_TCP && \
-    (MG_ARCH != MG_ARCH_TIRTOS) && !MG_ENABLE_POLL
+    (MG_ARCH != MG_ARCH_TIRTOS) && !MG_ENABLE_POLL && !MG_ENABLE_EPOLL
   } else if ((long) fd >= FD_SETSIZE) {
     MG_ERROR(("%ld > %ld", (long) fd, (long) FD_SETSIZE));
     closesocket(fd);
@@ -406,69 +413,11 @@ static void accept_conn(struct mg_mgr *mgr, struct mg_connection *lsn) {
     c->pfn_data = lsn->pfn_data;
     c->fn = lsn->fn;
     c->fn_data = lsn->fn_data;
-    MG_DEBUG(("%lu %p accepted %M -> %M", c->id, c->fd, mg_print_ip_port,
+    MG_DEBUG(("%lu %ld accepted %M -> %M", c->id, c->fd, mg_print_ip_port,
               &c->rem, mg_print_ip_port, &c->loc));
     mg_call(c, MG_EV_OPEN, NULL);
     mg_call(c, MG_EV_ACCEPT, NULL);
   }
-}
-
-static bool mg_socketpair(MG_SOCKET_TYPE sp[2], union usa usa[2], bool udp) {
-  MG_SOCKET_TYPE sock;
-  socklen_t n = sizeof(usa[0].sin);
-  bool success = false;
-
-  sock = sp[0] = sp[1] = MG_INVALID_SOCKET;
-  (void) memset(&usa[0], 0, sizeof(usa[0]));
-  usa[0].sin.sin_family = AF_INET;
-  *(uint32_t *) &usa->sin.sin_addr = mg_htonl(0x7f000001U);  // 127.0.0.1
-  usa[1] = usa[0];
-
-  if (udp && (sp[0] = socket(AF_INET, SOCK_DGRAM, 0)) != MG_INVALID_SOCKET &&
-      (sp[1] = socket(AF_INET, SOCK_DGRAM, 0)) != MG_INVALID_SOCKET &&
-      bind(sp[0], &usa[0].sa, n) == 0 && bind(sp[1], &usa[1].sa, n) == 0 &&
-      getsockname(sp[0], &usa[0].sa, &n) == 0 &&
-      getsockname(sp[1], &usa[1].sa, &n) == 0 &&
-      connect(sp[0], &usa[1].sa, n) == 0 &&
-      connect(sp[1], &usa[0].sa, n) == 0) {
-    success = true;
-  } else if (!udp &&
-             (sock = socket(AF_INET, SOCK_STREAM, 0)) != MG_INVALID_SOCKET &&
-             bind(sock, &usa[0].sa, n) == 0 &&
-             listen(sock, MG_SOCK_LISTEN_BACKLOG_SIZE) == 0 &&
-             getsockname(sock, &usa[0].sa, &n) == 0 &&
-             (sp[0] = socket(AF_INET, SOCK_STREAM, 0)) != MG_INVALID_SOCKET &&
-             connect(sp[0], &usa[0].sa, n) == 0 &&
-             (sp[1] = raccept(sock, &usa[1], &n)) != MG_INVALID_SOCKET) {
-    success = true;
-  }
-  if (success) {
-    mg_set_non_blocking_mode(sp[1]);
-  } else {
-    if (sp[0] != MG_INVALID_SOCKET) closesocket(sp[0]);
-    if (sp[1] != MG_INVALID_SOCKET) closesocket(sp[1]);
-    sp[0] = sp[1] = MG_INVALID_SOCKET;
-  }
-  if (sock != MG_INVALID_SOCKET) closesocket(sock);
-  return success;
-}
-
-int mg_mkpipe(struct mg_mgr *mgr, mg_event_handler_t fn, void *fn_data,
-              bool udp) {
-  union usa usa[2];
-  MG_SOCKET_TYPE sp[2] = {MG_INVALID_SOCKET, MG_INVALID_SOCKET};
-  struct mg_connection *c = NULL;
-  if (!mg_socketpair(sp, usa, udp)) {
-    MG_ERROR(("Cannot create socket pair"));
-  } else if ((c = mg_wrapfd(mgr, (int) sp[1], fn, fn_data)) == NULL) {
-    closesocket(sp[0]);
-    closesocket(sp[1]);
-    sp[0] = sp[1] = MG_INVALID_SOCKET;
-  } else {
-    tomgaddr(&usa[0], &c->rem, false);
-    MG_DEBUG(("%lu %p pipe %lu", c->id, c->fd, (unsigned long) sp[0]));
-  }
-  return (int) sp[0];
 }
 
 static bool can_read(const struct mg_connection *c) {
@@ -493,6 +442,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
     if (can_read(c))
       FreeRTOS_FD_SET(c->fd, mgr->ss, eSELECT_READ | eSELECT_EXCEPT);
     if (can_write(c)) FreeRTOS_FD_SET(c->fd, mgr->ss, eSELECT_WRITE);
+    if (c->is_closing) ms = 1;
   }
   FreeRTOS_select(mgr->ss, pdMS_TO_TICKS(ms));
   for (c = mgr->conns; c != NULL; c = c->next) {
@@ -509,6 +459,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
     c->is_readable = c->is_writable = 0;
     if (mg_tls_pending(c) > 0) ms = 1, c->is_readable = 1;
     if (can_write(c)) MG_EPOLL_MOD(c, 1);
+    if (c->is_closing) ms = 1;
     max++;
   }
   struct epoll_event *evs = (struct epoll_event *) alloca(max * sizeof(evs[0]));
@@ -541,6 +492,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
       fds[n].fd = FD(c);
       if (can_read(c)) fds[n].events |= POLLIN;
       if (can_write(c)) fds[n].events |= POLLOUT;
+      if (c->is_closing) ms = 1;
       n++;
     }
   }
@@ -570,7 +522,7 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
     }
   }
 #else
-  struct timeval tv = {ms / 1000, (ms % 1000) * 1000}, tv_zero = {0, 0};
+  struct timeval tv = {ms / 1000, (ms % 1000) * 1000}, tv_zero = {0, 0}, *tvp;
   struct mg_connection *c;
   fd_set rset, wset, eset;
   MG_SOCKET_TYPE maxfd = 0;
@@ -579,17 +531,19 @@ static void mg_iotest(struct mg_mgr *mgr, int ms) {
   FD_ZERO(&rset);
   FD_ZERO(&wset);
   FD_ZERO(&eset);
+  tvp = ms < 0 ? NULL : &tv;
   for (c = mgr->conns; c != NULL; c = c->next) {
     c->is_readable = c->is_writable = 0;
     if (skip_iotest(c)) continue;
     FD_SET(FD(c), &eset);
     if (can_read(c)) FD_SET(FD(c), &rset);
     if (can_write(c)) FD_SET(FD(c), &wset);
-    if (mg_tls_pending(c) > 0) tv = tv_zero;
+    if (mg_tls_pending(c) > 0) tvp = &tv_zero;
     if (FD(c) > maxfd) maxfd = FD(c);
+    if (c->is_closing) ms = 1;
   }
 
-  if ((rc = select((int) maxfd + 1, &rset, &wset, &eset, &tv)) < 0) {
+  if ((rc = select((int) maxfd + 1, &rset, &wset, &eset, tvp)) < 0) {
 #if MG_ARCH == MG_ARCH_WIN32
     if (maxfd == 0) Sleep(ms);  // On Windows, select fails if no sockets
 #else
